@@ -8,6 +8,7 @@ manual-changelog:
 # Not shipped to players
 ignore:
   - README.md
+  - media
   - .github
   - .gitignore
   - .gitattributes
