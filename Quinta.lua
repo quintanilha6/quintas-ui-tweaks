@@ -4,6 +4,7 @@ local ADDON_NAME = ...
 local DEFAULTS = {
   scale = 0.5,
   hideChat = true,
+  hideChatAlways = false,
   hideMenu = false,
   hideBags = false,
   hideTracker = false,
@@ -66,9 +67,28 @@ local function KeepEditBoxesVisible()
   end
 end
 
+local inCombat = false
+local function ChatHidden()
+  if not db then return false end
+  return db.hideChatAlways or (db.hideChat and (inCombat or InCombatLockdown() or UnitAffectingCombat("player")))
+end
+
 local function UpdateChatVisibility()
-  local inCombat = InCombatLockdown() or UnitAffectingCombat("player")
-  SetChatVisible(not (db and db.hideChat and inCombat))
+  SetChatVisible(not ChatHidden())
+end
+
+-- The game fades chat tabs back in on mouseover: keep them hidden
+local chatHooked = false
+local function HookChatFading()
+  if chatHooked then return end
+  chatHooked = true
+  for _, name in ipairs({ "FCF_FadeInChatFrame", "FCF_FadeOutChatFrame", "FCFTab_UpdateAlpha" }) do
+    if _G[name] then
+      hooksecurefunc(name, function()
+        if ChatHidden() then SetChatVisible(false) end
+      end)
+    end
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -238,7 +258,7 @@ local panel
 
 local function CreatePanel()
   panel = CreateFrame("Frame", "QuintaOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-  panel:SetSize(300, 340)
+  panel:SetSize(300, 370)
   panel:SetPoint("CENTER")
   panel:SetFrameStrata("DIALOG")
   panel:SetBackdrop({
@@ -306,9 +326,9 @@ local function CreatePanel()
   high:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -2)
   high:SetText(MAX_SCALE)
 
-  -- Hide chat checkbox
+  -- Hide chat in combat checkbox (greyed out while chat is always hidden)
   local check = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  check:SetPoint("TOPLEFT", 20, -110)
+  check:SetPoint("TOPLEFT", 20, -140)
   local checkText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   checkText:SetPoint("LEFT", check, "RIGHT", 4, 0)
   checkText:SetText("Hide chat in combat")
@@ -317,9 +337,31 @@ local function CreatePanel()
     UpdateChatVisibility()
   end)
 
+  local function UpdateCombatCheck()
+    if db.hideChatAlways then
+      check:Disable()
+      checkText:SetFontObject("GameFontDisable")
+    else
+      check:Enable()
+      checkText:SetFontObject("GameFontHighlight")
+    end
+  end
+
+  -- Hide chat always checkbox
+  local alwaysCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  alwaysCheck:SetPoint("TOPLEFT", 20, -110)
+  local alwaysText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  alwaysText:SetPoint("LEFT", alwaysCheck, "RIGHT", 4, 0)
+  alwaysText:SetText("Hide chat")
+  alwaysCheck:SetScript("OnClick", function(self)
+    db.hideChatAlways = self:GetChecked() and true or false
+    UpdateCombatCheck()
+    UpdateChatVisibility()
+  end)
+
   -- Hide menu bar checkbox
   local menuCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  menuCheck:SetPoint("TOPLEFT", 20, -140)
+  menuCheck:SetPoint("TOPLEFT", 20, -170)
   local menuText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   menuText:SetPoint("LEFT", menuCheck, "RIGHT", 4, 0)
   menuText:SetText("Hide menu bar (show on mouseover)")
@@ -330,7 +372,7 @@ local function CreatePanel()
 
   -- Hide bag bar checkbox
   local bagCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  bagCheck:SetPoint("TOPLEFT", 20, -170)
+  bagCheck:SetPoint("TOPLEFT", 20, -200)
   local bagText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   bagText:SetPoint("LEFT", bagCheck, "RIGHT", 4, 0)
   bagText:SetText("Hide bag bar (show on mouseover)")
@@ -341,7 +383,7 @@ local function CreatePanel()
 
   -- Hide quest tracker checkbox
   local trackerCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  trackerCheck:SetPoint("TOPLEFT", 20, -200)
+  trackerCheck:SetPoint("TOPLEFT", 20, -230)
   local trackerText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   trackerText:SetPoint("LEFT", trackerCheck, "RIGHT", 4, 0)
   trackerText:SetText("Hide quest tracker (show on mouseover)")
@@ -352,12 +394,12 @@ local function CreatePanel()
 
   -- Camera distance slider
   local zoomLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  zoomLabel:SetPoint("TOPLEFT", 24, -240)
+  zoomLabel:SetPoint("TOPLEFT", 24, -270)
 
   local zoomSlider = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate")
   zoomSlider:SetOrientation("HORIZONTAL")
   zoomSlider:SetSize(230, 17)
-  zoomSlider:SetPoint("TOPLEFT", 24, -260)
+  zoomSlider:SetPoint("TOPLEFT", 24, -290)
   zoomSlider:SetBackdrop({
     bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
     edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
@@ -389,7 +431,7 @@ local function CreatePanel()
 
   -- Auto-upgrade spell ranks checkbox
   local rankCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  rankCheck:SetPoint("TOPLEFT", 20, -298)
+  rankCheck:SetPoint("TOPLEFT", 20, -328)
   local rankText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   rankText:SetPoint("LEFT", rankCheck, "RIGHT", 4, 0)
   rankText:SetText("Auto-upgrade spell ranks on bars")
@@ -405,6 +447,8 @@ local function CreatePanel()
     slider:SetValue(db.scale)
     UpdateLabel(db.scale)
     check:SetChecked(db.hideChat)
+    alwaysCheck:SetChecked(db.hideChatAlways)
+    UpdateCombatCheck()
     menuCheck:SetChecked(db.hideMenu)
     bagCheck:SetChecked(db.hideBags)
     trackerCheck:SetChecked(db.hideTracker)
@@ -451,13 +495,16 @@ f:SetScript("OnEvent", function(self, event, arg1)
   if not db then return end
 
   if event == "PLAYER_REGEN_DISABLED" then
-    if db.hideChat then SetChatVisible(false) end
+    inCombat = true
+    UpdateChatVisibility()
     return
   elseif event == "PLAYER_REGEN_ENABLED" then
-    SetChatVisible(true)
+    inCombat = false
+    SetChatVisible(not db.hideChatAlways)
     if rankPending then QueueRankUpgrade() end
   elseif event == "PLAYER_ENTERING_WORLD" then
     KeepEditBoxesVisible()
+    HookChatFading()
     UpdateChatVisibility()
     SetupBarHiding()
     ApplyCameraZoom(db.cameraZoom)

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.0] - 2026-11-15
+
+- New **Hide chat** option: hides chat all the time, not only in combat. While it's on, "Hide chat in combat" is greyed out. The typing box still shows when you press Enter.
+
 ## [1.0.0] - 2026-11-15
 
 First public release.
