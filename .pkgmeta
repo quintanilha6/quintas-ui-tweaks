@@ -1,0 +1,14 @@
+# BigWigs packager settings: https://github.com/BigWigsMods/packager
+package-as: Quinta
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+# Not shipped to players
+ignore:
+  - README.md
+  - .github
+  - .gitignore
+  - .gitattributes
+  - .pkgmeta
