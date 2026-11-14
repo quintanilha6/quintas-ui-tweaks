@@ -3,7 +3,7 @@
 A few small World of Warcraft UI tweaks in one lightweight addon. Type `/quinta` to open the options.
 
 - **UI scale** slider (0.3 to 1.2)
-- **Hide chat**, always or only in combat, back as soon as combat ends (the typing box stays visible if you open it)
+- **Hide chat**, all the time or only in combat (the typing box still shows when you press Enter)
 - **Hide the menu bar, bag bar and quest tracker**, they fade back in when you hover over them
 - **Max camera distance** slider
 - **Auto-upgrade spell ranks** on your action bars when you learn a new rank
