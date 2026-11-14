@@ -7,5 +7,6 @@
 ## X-License: MIT
 ## X-Category: Interface Enhancements
 ## X-Website: https://github.com/quintanilha6/quintas-ui-tweaks
+## X-Curse-Project-ID: 1806073
 
 Quinta.lua
