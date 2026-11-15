@@ -10,6 +10,7 @@ local DEFAULTS = {
   hideTracker = false,
   cameraZoom = 2.6,
   autoRank = true,
+  playerBorder = "normal",
 }
 local MIN_ZOOM, MAX_ZOOM, ZOOM_STEP = 1.0, 2.6, 0.1
 
@@ -27,6 +28,66 @@ local db
 local function ApplyScale()
   if db and not InCombatLockdown() then
     UIParent:SetScale(db.scale)
+  end
+end
+
+---------------------------------------------------------------------------
+-- Player frame border (elite dragon etc.)
+---------------------------------------------------------------------------
+-- texture: the old-style player frame. atlas/x: the modern player frame,
+-- where the target frame's dragon is mirrored onto the player portrait.
+local BORDERS = {
+  { key = "normal", label = "Normal", texture = "Interface\\TargetingFrame\\UI-TargetingFrame" },
+  { key = "elite", label = "Elite", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Elite",
+    atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", x = 11 },
+  { key = "boss", label = "Boss", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Elite",
+    atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", x = -8 },
+  { key = "rareelite", label = "Rare elite", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Rare-Elite",
+    atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 11 },
+}
+
+local function BorderIndex()
+  for i, b in ipairs(BORDERS) do
+    if db and b.key == db.playerBorder then return i end
+  end
+  return 1
+end
+
+local dragon
+local function ApplyPlayerBorder(force)
+  if not db then return end
+  local b = BORDERS[BorderIndex()]
+  -- old-style frame: swap the whole frame texture
+  local tex = _G.PlayerFrameTexture
+  if tex then
+    -- "Normal" leaves the frame alone (unless you just switched back to it)
+    if force or b.key ~= "normal" then tex:SetTexture(b.texture) end
+    return
+  end
+  -- modern frame: our own dragon texture over the portrait, flipped
+  local container = PlayerFrame and PlayerFrame.PlayerFrameContainer
+  if not container then return end
+  if not b.atlas then
+    if dragon then dragon:Hide() end
+    return
+  end
+  dragon = dragon or container:CreateTexture(nil, "ARTWORK", nil, 2)
+  dragon:SetAtlas(b.atlas, true)
+  local ulx, uly, llx, lly, urx, ury, lrx, lry = dragon:GetTexCoord()
+  dragon:SetTexCoord(urx, ury, lrx, lry, ulx, uly, llx, lly) -- mirror left/right
+  dragon:ClearAllPoints()
+  local nudge = db.borderNudge and db.borderNudge[b.key] or { 0, 0 } -- /quinta nudge
+  dragon:SetPoint("TOPLEFT", container, "TOPLEFT", b.x + nudge[1], -8 + nudge[2])
+  dragon:Show()
+end
+
+-- The game redraws the player frame art in some cases: put the border back
+local borderHooked = false
+local function HookPlayerBorder()
+  if borderHooked then return end
+  borderHooked = true
+  for _, name in ipairs({ "PlayerFrame_ToPlayerArt", "PlayerFrame_UpdateArt" }) do
+    if _G[name] then hooksecurefunc(name, function() ApplyPlayerBorder() end) end
   end
 end
 
@@ -258,7 +319,7 @@ local panel
 
 local function CreatePanel()
   panel = CreateFrame("Frame", "QuintaOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-  panel:SetSize(300, 370)
+  panel:SetSize(300, 405)
   panel:SetPoint("CENTER")
   panel:SetFrameStrata("DIALOG")
   panel:SetBackdrop({
@@ -440,7 +501,24 @@ local function CreatePanel()
     if db.autoRank then UpgradeActionBarRanks() end
   end)
 
+  -- Player frame border: click to cycle through the styles
+  local borderText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  borderText:SetPoint("TOPLEFT", 24, -368)
+  borderText:SetText("Player frame border")
+  local borderButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  borderButton:SetSize(110, 22)
+  borderButton:SetPoint("LEFT", borderText, "RIGHT", 10, 0)
+  local function UpdateBorderButton()
+    borderButton:SetText(BORDERS[BorderIndex()].label)
+  end
+  borderButton:SetScript("OnClick", function()
+    db.playerBorder = BORDERS[BorderIndex() % #BORDERS + 1].key
+    UpdateBorderButton()
+    ApplyPlayerBorder(true)
+  end)
+
   panel:SetScript("OnShow", function()
+    UpdateBorderButton()
     rankCheck:SetChecked(db.autoRank)
     zoomSlider:SetValue(db.cameraZoom)
     UpdateZoomLabel(db.cameraZoom)
@@ -456,7 +534,18 @@ local function CreatePanel()
 end
 
 SLASH_QUINTA1 = "/quinta"
-SlashCmdList.QUINTA = function()
+SlashCmdList.QUINTA = function(msg)
+  -- /quinta nudge <x> <y>: move the player frame dragon (right/up are positive)
+  local dx, dy = (msg or ""):match("^nudge%s+(%-?%d+)%s+(%-?%d+)")
+  if dx then
+    local key = BORDERS[BorderIndex()].key
+    db.borderNudge = db.borderNudge or {}
+    local n = db.borderNudge[key] or { 0, 0 }
+    db.borderNudge[key] = { n[1] + tonumber(dx), n[2] + tonumber(dy) }
+    ApplyPlayerBorder()
+    print(("|cff33ff99Quinta:|r %s dragon moved to %d, %d."):format(key, db.borderNudge[key][1], db.borderNudge[key][2]))
+    return
+  end
   if not panel then CreatePanel() end
   panel:SetShown(not panel:IsShown())
 end
@@ -505,6 +594,8 @@ f:SetScript("OnEvent", function(self, event, arg1)
   elseif event == "PLAYER_ENTERING_WORLD" then
     KeepEditBoxesVisible()
     HookChatFading()
+    HookPlayerBorder()
+    ApplyPlayerBorder()
     UpdateChatVisibility()
     SetupBarHiding()
     ApplyCameraZoom(db.cameraZoom)

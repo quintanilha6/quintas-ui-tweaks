@@ -7,6 +7,7 @@ A few small World of Warcraft UI tweaks in one lightweight addon. Type `/quinta`
 - **Hide the menu bar, bag bar and quest tracker**, they fade back in when you hover over them
 - **Max camera distance** slider
 - **Auto-upgrade spell ranks** on your action bars when you learn a new rank
+- **Player frame border**: elite, boss or rare elite dragon around your portrait (`/quinta nudge <x> <y>` to fine-tune its position)
 
 Works on Classic Era, Anniversary, TBC, Wrath/Cata/MoP Classic and Retail.
 
