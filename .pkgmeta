@@ -13,3 +13,4 @@ ignore:
   - .gitignore
   - .gitattributes
   - .pkgmeta
+  - .claude

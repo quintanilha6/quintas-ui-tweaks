@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.5.0] - 2026-11-20
+
+### Changed
+- The `/quinta` window is now organized into groups (General, Chat, Hide until hover, Action bars, Group & loot, Class) in two columns.
+
 ## [1.4.0] - 2026-11-20
 
 ### Added

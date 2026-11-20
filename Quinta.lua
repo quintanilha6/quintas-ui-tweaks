@@ -714,9 +714,80 @@ end
 ---------------------------------------------------------------------------
 local panel
 
+-- What the window shows: one header per section, stacked in column 1 (left)
+-- or 2 (right). To add a setting, add an item to the section it belongs to.
+--   check:  { type = "check", key = <db key>, label, onChange(value), disabled() }
+--   slider: { type = "slider", key = <db key>, label = "Text: %.1f", min, max, step,
+--             onChange(value) while dragging, onRelease(value) when let go }
+--   button: { type = "button", label, onClick() }
+local SECTIONS = {
+  { title = "General", column = 1, items = {
+    { type = "slider", key = "scale", label = "UI scale: %.2f",
+      min = MIN_SCALE, max = MAX_SCALE, step = STEP,
+      -- Apply when you let go, so the window doesn't jump around while dragging
+      onRelease = function()
+        if InCombatLockdown() then
+          print("|cff33ff99Quinta:|r scale will apply after combat.")
+        end
+        ApplyScale()
+      end },
+    { type = "slider", key = "cameraZoom", label = "Max camera distance: %.1f",
+      min = MIN_ZOOM, max = MAX_ZOOM, step = ZOOM_STEP,
+      onChange = function(value) ApplyCameraZoom(value) end },
+  } },
+
+  { title = "Chat", column = 1, items = {
+    { type = "check", key = "hideChatAlways", label = "Hide chat",
+      onChange = function() UpdateChatVisibility() end },
+    { type = "check", key = "hideChat", label = "Hide chat in combat",
+      onChange = function() UpdateChatVisibility() end,
+      disabled = function() return db.hideChatAlways end },
+  } },
+
+  { title = "Hide until hover", column = 1, items = {
+    { type = "check", key = "hideMenu", label = "Menu bar",
+      onChange = function() SetupBarHiding() end },
+    { type = "check", key = "hideBags", label = "Bag bar",
+      onChange = function() SetupBarHiding() end },
+    { type = "check", key = "hideTracker", label = "Quest tracker",
+      onChange = function() SetupBarHiding() end },
+  } },
+
+  { title = "Action bars", column = 2, items = {
+    { type = "check", key = "autoRank", label = "Auto-upgrade spell ranks",
+      onChange = function(on) if on then UpgradeActionBarRanks() end end },
+    -- e.g. after learning spells on another computer
+    { type = "button", label = "Update ranks now",
+      onClick = function() UpgradeActionBarRanks(true) end },
+  } },
+
+  { title = "Group & loot", column = 2, items = {
+    { type = "check", key = "showMarkers", label = "Raid marker panel",
+      onChange = function() UpdateMarkers() end },
+    { type = "check", key = "moveLoot", label = "Move loot rolls (Shift-drag)",
+      onChange = function(on)
+        if on then
+          SetupLootMover()
+          AnchorLoot(LootTarget())
+        else
+          if lootPlacing then ToggleLootPlacing() end
+          print("|cff33ff99Quinta:|r /reload to put the loot roll window back in its usual spot.")
+        end
+      end },
+  } },
+
+  { title = "Class", column = 2, items = {
+    { type = "check", key = "deathAlert", label = "Shadow Word: Death kill alert",
+      onChange = function() UpdateDeathAlert() end },
+  } },
+}
+
+local PANEL_WIDTH, COLUMN_WIDTH = 580, 260
+local COLUMN_X = { 20, 300 }
+local TOP_Y, SECTION_GAP = -48, 10
+
 local function CreatePanel()
   panel = CreateFrame("Frame", "QuintaOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-  panel:SetSize(300, 490)
   panel:SetPoint("CENTER")
   panel:SetFrameStrata("DIALOG")
   panel:SetBackdrop({
@@ -741,225 +812,114 @@ local function CreatePanel()
   local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", -6, -6)
 
-  -- Scale slider
-  local label = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  label:SetPoint("TOPLEFT", 24, -52)
-
-  local slider = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate")
-  slider:SetOrientation("HORIZONTAL")
-  slider:SetSize(230, 17)
-  slider:SetPoint("TOPLEFT", 24, -72)
-  slider:SetBackdrop({
-    bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
-    edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-    tile = true, tileSize = 8, edgeSize = 8,
-    insets = { left = 3, right = 3, top = 6, bottom = 6 },
-  })
-  slider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-  slider:SetMinMaxValues(MIN_SCALE, MAX_SCALE)
-  slider:SetValueStep(STEP)
-  slider:SetObeyStepOnDrag(true)
-
-  local function UpdateLabel(value)
-    label:SetText(string.format("UI scale: %.2f", value))
+  local y = { TOP_Y, TOP_Y } -- where the next control goes, per column
+  local refreshers = {}
+  local function RefreshAll()
+    for _, refresh in ipairs(refreshers) do refresh() end
   end
 
-  slider:SetScript("OnValueChanged", function(self, value)
-    value = math.floor(value / STEP + 0.5) * STEP
-    UpdateLabel(value)
-    db.scale = value
-  end)
-  -- Apply when you let go, so the window doesn't jump around while dragging
-  slider:SetScript("OnMouseUp", function()
-    if InCombatLockdown() then
-      print("|cff33ff99Quinta:|r scale will apply after combat.")
-    end
-    ApplyScale()
-  end)
+  local function AddHeader(col, text)
+    local x = COLUMN_X[col]
+    local header = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    header:SetPoint("TOPLEFT", x + 4, y[col])
+    header:SetText(text)
+    local line = panel:CreateTexture(nil, "ARTWORK")
+    line:SetColorTexture(1, 0.82, 0, 0.3)
+    line:SetSize(COLUMN_WIDTH, 1)
+    line:SetPoint("TOPLEFT", x + 4, y[col] - 16)
+    y[col] = y[col] - 22
+  end
 
-  local low = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  low:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -2)
-  low:SetText(MIN_SCALE)
-  local high = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  high:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -2)
-  high:SetText(MAX_SCALE)
-
-  -- Hide chat in combat checkbox (greyed out while chat is always hidden)
-  local check = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  check:SetPoint("TOPLEFT", 20, -140)
-  local checkText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  checkText:SetPoint("LEFT", check, "RIGHT", 4, 0)
-  checkText:SetText("Hide chat in combat")
-  check:SetScript("OnClick", function(self)
-    db.hideChat = self:GetChecked() and true or false
-    UpdateChatVisibility()
-  end)
-
-  local function UpdateCombatCheck()
-    if db.hideChatAlways then
-      check:Disable()
-      checkText:SetFontObject("GameFontDisable")
-    else
-      check:Enable()
-      checkText:SetFontObject("GameFontHighlight")
+  local function AddCheck(col, item)
+    local check = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    check:SetPoint("TOPLEFT", COLUMN_X[col], y[col])
+    local text = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    text:SetPoint("LEFT", check, "RIGHT", 4, 0)
+    text:SetText(item.label)
+    check:SetScript("OnClick", function(self)
+      db[item.key] = self:GetChecked() and true or false
+      if item.onChange then item.onChange(db[item.key]) end
+      RefreshAll() -- other controls may depend on this one
+    end)
+    y[col] = y[col] - 30
+    return function()
+      check:SetChecked(db[item.key])
+      if item.disabled and item.disabled() then
+        check:Disable()
+        text:SetFontObject("GameFontDisable")
+      else
+        check:Enable()
+        text:SetFontObject("GameFontHighlight")
+      end
     end
   end
 
-  -- Hide chat always checkbox
-  local alwaysCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  alwaysCheck:SetPoint("TOPLEFT", 20, -110)
-  local alwaysText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  alwaysText:SetPoint("LEFT", alwaysCheck, "RIGHT", 4, 0)
-  alwaysText:SetText("Hide chat")
-  alwaysCheck:SetScript("OnClick", function(self)
-    db.hideChatAlways = self:GetChecked() and true or false
-    UpdateCombatCheck()
-    UpdateChatVisibility()
-  end)
+  local function AddSlider(col, item)
+    local x = COLUMN_X[col] + 4
+    local label = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    label:SetPoint("TOPLEFT", x, y[col] - 4)
 
-  -- Hide menu bar checkbox
-  local menuCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  menuCheck:SetPoint("TOPLEFT", 20, -170)
-  local menuText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  menuText:SetPoint("LEFT", menuCheck, "RIGHT", 4, 0)
-  menuText:SetText("Hide menu bar (show on mouseover)")
-  menuCheck:SetScript("OnClick", function(self)
-    db.hideMenu = self:GetChecked() and true or false
-    SetupBarHiding()
-  end)
+    local slider = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate")
+    slider:SetOrientation("HORIZONTAL")
+    slider:SetSize(COLUMN_WIDTH - 20, 17)
+    slider:SetPoint("TOPLEFT", x, y[col] - 24)
+    slider:SetBackdrop({
+      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+      tile = true, tileSize = 8, edgeSize = 8,
+      insets = { left = 3, right = 3, top = 6, bottom = 6 },
+    })
+    slider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+    slider:SetMinMaxValues(item.min, item.max)
+    slider:SetValueStep(item.step)
+    slider:SetObeyStepOnDrag(true)
 
-  -- Hide bag bar checkbox
-  local bagCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  bagCheck:SetPoint("TOPLEFT", 20, -200)
-  local bagText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  bagText:SetPoint("LEFT", bagCheck, "RIGHT", 4, 0)
-  bagText:SetText("Hide bag bar (show on mouseover)")
-  bagCheck:SetScript("OnClick", function(self)
-    db.hideBags = self:GetChecked() and true or false
-    SetupBarHiding()
-  end)
+    local low = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    low:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -2)
+    low:SetText(item.min)
+    local high = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    high:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -2)
+    high:SetText(item.max)
 
-  -- Hide quest tracker checkbox
-  local trackerCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  trackerCheck:SetPoint("TOPLEFT", 20, -230)
-  local trackerText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  trackerText:SetPoint("LEFT", trackerCheck, "RIGHT", 4, 0)
-  trackerText:SetText("Hide quest tracker (show on mouseover)")
-  trackerCheck:SetScript("OnClick", function(self)
-    db.hideTracker = self:GetChecked() and true or false
-    SetupBarHiding()
-  end)
-
-  -- Camera distance slider
-  local zoomLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  zoomLabel:SetPoint("TOPLEFT", 24, -270)
-
-  local zoomSlider = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate")
-  zoomSlider:SetOrientation("HORIZONTAL")
-  zoomSlider:SetSize(230, 17)
-  zoomSlider:SetPoint("TOPLEFT", 24, -290)
-  zoomSlider:SetBackdrop({
-    bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
-    edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-    tile = true, tileSize = 8, edgeSize = 8,
-    insets = { left = 3, right = 3, top = 6, bottom = 6 },
-  })
-  zoomSlider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-  zoomSlider:SetMinMaxValues(MIN_ZOOM, MAX_ZOOM)
-  zoomSlider:SetValueStep(ZOOM_STEP)
-  zoomSlider:SetObeyStepOnDrag(true)
-
-  local function UpdateZoomLabel(value)
-    zoomLabel:SetText(string.format("Max camera distance: %.1f", value))
+    local function SetLabel(value) label:SetText(string.format(item.label, value)) end
+    slider:SetScript("OnValueChanged", function(_, value)
+      value = math.floor(value / item.step + 0.5) * item.step
+      SetLabel(value)
+      db[item.key] = value
+      if item.onChange then item.onChange(value) end
+    end)
+    if item.onRelease then
+      slider:SetScript("OnMouseUp", function() item.onRelease(db[item.key]) end)
+    end
+    y[col] = y[col] - 62
+    return function()
+      slider:SetValue(db[item.key])
+      SetLabel(db[item.key])
+    end
   end
 
-  zoomSlider:SetScript("OnValueChanged", function(self, value)
-    value = math.floor(value / ZOOM_STEP + 0.5) * ZOOM_STEP
-    UpdateZoomLabel(value)
-    db.cameraZoom = value
-    ApplyCameraZoom(value)
-  end)
+  local function AddButton(col, item)
+    local button = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    button:SetSize(160, 22)
+    button:SetPoint("TOPLEFT", COLUMN_X[col] + 30, y[col] - 2)
+    button:SetText(item.label)
+    button:SetScript("OnClick", function() item.onClick() end)
+    y[col] = y[col] - 30
+  end
 
-  local zoomLow = zoomSlider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  zoomLow:SetPoint("TOPLEFT", zoomSlider, "BOTTOMLEFT", 0, -2)
-  zoomLow:SetText(MIN_ZOOM)
-  local zoomHigh = zoomSlider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  zoomHigh:SetPoint("TOPRIGHT", zoomSlider, "BOTTOMRIGHT", 0, -2)
-  zoomHigh:SetText(MAX_ZOOM)
-
-  -- Auto-upgrade spell ranks checkbox
-  local rankCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  rankCheck:SetPoint("TOPLEFT", 20, -328)
-  local rankText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  rankText:SetPoint("LEFT", rankCheck, "RIGHT", 4, 0)
-  rankText:SetText("Auto-upgrade spell ranks on bars")
-  rankCheck:SetScript("OnClick", function(self)
-    db.autoRank = self:GetChecked() and true or false
-    if db.autoRank then UpgradeActionBarRanks() end
-  end)
-
-  -- Update ranks now button (e.g. after learning spells on another computer)
-  local rankButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  rankButton:SetSize(150, 22)
-  rankButton:SetPoint("TOPLEFT", rankCheck, "BOTTOMLEFT", 30, -2)
-  rankButton:SetText("Update ranks now")
-  rankButton:SetScript("OnClick", function() UpgradeActionBarRanks(true) end)
-
-  -- Raid marker panel checkbox
-  local markCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  markCheck:SetPoint("TOPLEFT", 20, -392)
-  local markText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  markText:SetPoint("LEFT", markCheck, "RIGHT", 4, 0)
-  markText:SetText("Show raid marker panel")
-  markCheck:SetScript("OnClick", function(self)
-    db.showMarkers = self:GetChecked() and true or false
-    UpdateMarkers()
-  end)
-
-  -- Movable loot roll window checkbox
-  local lootCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  lootCheck:SetPoint("TOPLEFT", 20, -422)
-  local lootText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  lootText:SetPoint("LEFT", lootCheck, "RIGHT", 4, 0)
-  lootText:SetText("Move loot roll window (Shift-drag)")
-  lootCheck:SetScript("OnClick", function(self)
-    db.moveLoot = self:GetChecked() and true or false
-    if db.moveLoot then
-      SetupLootMover()
-      AnchorLoot(LootTarget())
-    else
-      if lootPlacing then ToggleLootPlacing() end
-      print("|cff33ff99Quinta:|r /reload to put the loot roll window back in its usual spot.")
+  local builders = { check = AddCheck, slider = AddSlider, button = AddButton }
+  for _, section in ipairs(SECTIONS) do
+    local col = section.column
+    AddHeader(col, section.title)
+    for _, item in ipairs(section.items) do
+      local refresh = builders[item.type](col, item)
+      if refresh then refreshers[#refreshers + 1] = refresh end
     end
-  end)
+    y[col] = y[col] - SECTION_GAP
+  end
 
-  -- Shadow Word: Death alert checkbox
-  local deathCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  deathCheck:SetPoint("TOPLEFT", 20, -452)
-  local deathText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  deathText:SetPoint("LEFT", deathCheck, "RIGHT", 4, 0)
-  deathText:SetText("Shadow Word: Death kill alert")
-  deathCheck:SetScript("OnClick", function(self)
-    db.deathAlert = self:GetChecked() and true or false
-    UpdateDeathAlert()
-  end)
-
-  panel:SetScript("OnShow", function()
-    deathCheck:SetChecked(db.deathAlert)
-    lootCheck:SetChecked(db.moveLoot)
-    markCheck:SetChecked(db.showMarkers)
-    rankCheck:SetChecked(db.autoRank)
-    zoomSlider:SetValue(db.cameraZoom)
-    UpdateZoomLabel(db.cameraZoom)
-    slider:SetValue(db.scale)
-    UpdateLabel(db.scale)
-    check:SetChecked(db.hideChat)
-    alwaysCheck:SetChecked(db.hideChatAlways)
-    UpdateCombatCheck()
-    menuCheck:SetChecked(db.hideMenu)
-    bagCheck:SetChecked(db.hideBags)
-    trackerCheck:SetChecked(db.hideTracker)
-  end)
+  panel:SetSize(PANEL_WIDTH, -math.min(y[1], y[2]) + 10)
+  panel:SetScript("OnShow", RefreshAll)
 end
 
 SLASH_QUINTA1 = "/quinta"

@@ -2,13 +2,27 @@
 
 A few small World of Warcraft UI tweaks in one lightweight addon. Type `/quinta` to open the options.
 
+The options are grouped like this:
+
+**General**
 - **UI scale** slider (0.3 to 1.2)
-- **Hide chat**, all the time or only in combat (the typing box still shows when you press Enter)
-- **Hide the menu bar, bag bar and quest tracker**, they fade back in when you hover over them
 - **Max camera distance** slider
-- **Auto-upgrade spell ranks** on your action bars when you learn a new rank, plus an **Update ranks now** button (or `/quinta ranks`) for bars that missed it, like Gamepad bars on another computer
-- **Raid marker panel** (optional, off by default): click a mark to put it on your target
+
+**Chat**
+- **Hide chat**, all the time or only in combat (the typing box still shows when you press Enter)
+
+**Hide until hover**
+- **Menu bar, bag bar and quest tracker** fade back in when you hover over them
+
+**Action bars**
+- **Auto-upgrade spell ranks** on your action bars when you learn a new rank
+- **Update ranks now** button (or `/quinta ranks`) for bars that missed it, like Gamepad bars on another computer
+
+**Group & loot**
+- **Raid marker panel** (off by default): click a mark to put it on your target
 - **Movable loot roll window**: Shift-drag a roll, or `/quinta loot` to place it
+
+**Class**
 - **Shadow Word: Death kill alert** (priests): an icon pops up when your target is low enough for it to kill, and it isn't on cooldown (`/quinta swd` to move it)
 
 Works on Classic Era, Anniversary, TBC, Wrath/Cata/MoP Classic and Retail.
