@@ -220,17 +220,53 @@ local function GetHighestRanks()
   return best
 end
 
-local rankPending = false
-local function UpgradeActionBarRanks()
-  if not db or not db.autoRank then return end
+-- Every action slot worth checking: a wide fixed range, plus the slot of
+-- every action button that exists (covers bars like the Gamepad ones that
+-- may use slots outside the usual range).
+local MAX_ACTION_SLOT = 1000
+local function GetActionSlots()
+  local seen, slots = {}, {}
+  local function add(slot)
+    if type(slot) == "number" and slot > 0 and not seen[slot] then
+      seen[slot] = true
+      slots[#slots + 1] = slot
+    end
+  end
+  for slot = 1, MAX_ACTION_SLOT do add(slot) end
+  local frame = EnumerateFrames()
+  while frame do
+    if not frame:IsForbidden() then
+      local slot = frame.action
+      if type(slot) ~= "number" and frame.GetAttribute then
+        local ok, attr = pcall(frame.GetAttribute, frame, "action")
+        if ok then slot = tonumber(attr) end
+      end
+      add(slot)
+    end
+    frame = EnumerateFrames(frame)
+  end
+  return slots
+end
+
+local rankPending, rankPendingManual = false, false
+-- manual = run from the button or /quinta ranks: ignores the auto setting
+-- and reports what it did
+local function UpgradeActionBarRanks(manual)
+  if not db then return end
+  if not manual and not db.autoRank then return end
   if InCombatLockdown() or GetCursorInfo() then
     rankPending = true -- try again after combat
+    if manual then
+      rankPendingManual = true
+      print("|cff33ff99Quinta:|r will update spell ranks after combat.")
+    end
     return
   end
-  rankPending = false
+  rankPending, rankPendingManual = false, false
 
   local best = GetHighestRanks()
-  for slot = 1, 180 do
+  local count = 0
+  for _, slot in ipairs(GetActionSlots()) do
     local actionType, id = GetActionInfo(slot)
     if actionType == "spell" and id then
       local name = GetSpellNameByID(id)
@@ -239,8 +275,17 @@ local function UpgradeActionBarRanks()
         PickupSpellByID(top.id)
         PlaceAction(slot)
         ClearCursor() -- drops the old rank that ends up on the cursor
+        count = count + 1
         print(string.format("|cff33ff99Quinta:|r upgraded %s to rank %d.", name, top.rank))
       end
+    end
+  end
+
+  if manual then
+    if count == 0 then
+      print("|cff33ff99Quinta:|r all spells on your bars are already at their highest rank.")
+    else
+      print(string.format("|cff33ff99Quinta:|r updated %d spell%s to the highest rank.", count, count == 1 and "" or "s"))
     end
   end
 end
@@ -250,7 +295,7 @@ local function QueueRankUpgrade()
   if rankTimer then return end
   rankTimer = C_Timer.NewTimer(1, function()
     rankTimer = nil
-    UpgradeActionBarRanks()
+    UpgradeActionBarRanks(rankPendingManual)
   end)
 end
 
@@ -671,7 +716,7 @@ local panel
 
 local function CreatePanel()
   panel = CreateFrame("Frame", "QuintaOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-  panel:SetSize(300, 460)
+  panel:SetSize(300, 490)
   panel:SetPoint("CENTER")
   panel:SetFrameStrata("DIALOG")
   panel:SetBackdrop({
@@ -853,9 +898,16 @@ local function CreatePanel()
     if db.autoRank then UpgradeActionBarRanks() end
   end)
 
+  -- Update ranks now button (e.g. after learning spells on another computer)
+  local rankButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  rankButton:SetSize(150, 22)
+  rankButton:SetPoint("TOPLEFT", rankCheck, "BOTTOMLEFT", 30, -2)
+  rankButton:SetText("Update ranks now")
+  rankButton:SetScript("OnClick", function() UpgradeActionBarRanks(true) end)
+
   -- Raid marker panel checkbox
   local markCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  markCheck:SetPoint("TOPLEFT", 20, -362)
+  markCheck:SetPoint("TOPLEFT", 20, -392)
   local markText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   markText:SetPoint("LEFT", markCheck, "RIGHT", 4, 0)
   markText:SetText("Show raid marker panel")
@@ -866,7 +918,7 @@ local function CreatePanel()
 
   -- Movable loot roll window checkbox
   local lootCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  lootCheck:SetPoint("TOPLEFT", 20, -392)
+  lootCheck:SetPoint("TOPLEFT", 20, -422)
   local lootText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   lootText:SetPoint("LEFT", lootCheck, "RIGHT", 4, 0)
   lootText:SetText("Move loot roll window (Shift-drag)")
@@ -883,7 +935,7 @@ local function CreatePanel()
 
   -- Shadow Word: Death alert checkbox
   local deathCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-  deathCheck:SetPoint("TOPLEFT", 20, -422)
+  deathCheck:SetPoint("TOPLEFT", 20, -452)
   local deathText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   deathText:SetPoint("LEFT", deathCheck, "RIGHT", 4, 0)
   deathText:SetText("Shadow Word: Death kill alert")
@@ -915,6 +967,7 @@ SlashCmdList.QUINTA = function(msg)
   -- /quinta loot: place the loot roll window; /quinta loot reset: back to default
   local lootCmd = (msg or ""):lower():match("^loot%s*(%a*)")
   if (msg or ""):lower():match("^%s*swd") then ToggleAlertPlacing() return end
+  if (msg or ""):lower():match("^%s*ranks?%s*$") then UpgradeActionBarRanks(true) return end
   if lootCmd then
     if lootCmd == "reset" then
       db.lootPos = nil

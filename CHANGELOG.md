@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.0] - 2026-11-20
+
+### Added
+- **Update ranks now** button in `/quinta` (also `/quinta ranks`): puts the highest rank of every spell on all your action bars, even with auto-upgrade off. Handy when you learned the ranks on another computer, e.g. for the Gamepad bars on a Steam Deck.
+- Rank upgrades now also check action buttons outside the usual slots 1-180, so bars like the Gamepad ones are covered.
+
 ## [1.3.0] - 2026-11-20
 
 ### Added
