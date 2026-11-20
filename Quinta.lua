@@ -10,7 +10,9 @@ local DEFAULTS = {
   hideTracker = false,
   cameraZoom = 2.6,
   autoRank = true,
-  playerBorder = "normal",
+  showMarkers = false,
+  moveLoot = true,
+  deathAlert = true,
 }
 local MIN_ZOOM, MAX_ZOOM, ZOOM_STEP = 1.0, 2.6, 0.1
 
@@ -28,66 +30,6 @@ local db
 local function ApplyScale()
   if db and not InCombatLockdown() then
     UIParent:SetScale(db.scale)
-  end
-end
-
----------------------------------------------------------------------------
--- Player frame border (elite dragon etc.)
----------------------------------------------------------------------------
--- texture: the old-style player frame. atlas/x: the modern player frame,
--- where the target frame's dragon is mirrored onto the player portrait.
-local BORDERS = {
-  { key = "normal", label = "Normal", texture = "Interface\\TargetingFrame\\UI-TargetingFrame" },
-  { key = "elite", label = "Elite", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Elite",
-    atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold", x = 11 },
-  { key = "boss", label = "Boss", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Elite",
-    atlas = "UI-HUD-UnitFrame-Target-PortraitOn-Boss-Gold-Winged", x = -8 },
-  { key = "rareelite", label = "Rare elite", texture = "Interface\\TargetingFrame\\UI-TargetingFrame-Rare-Elite",
-    atlas = "ui-hud-unitframe-target-portraiton-boss-rare-silver", x = 11 },
-}
-
-local function BorderIndex()
-  for i, b in ipairs(BORDERS) do
-    if db and b.key == db.playerBorder then return i end
-  end
-  return 1
-end
-
-local dragon
-local function ApplyPlayerBorder(force)
-  if not db then return end
-  local b = BORDERS[BorderIndex()]
-  -- old-style frame: swap the whole frame texture
-  local tex = _G.PlayerFrameTexture
-  if tex then
-    -- "Normal" leaves the frame alone (unless you just switched back to it)
-    if force or b.key ~= "normal" then tex:SetTexture(b.texture) end
-    return
-  end
-  -- modern frame: our own dragon texture over the portrait, flipped
-  local container = PlayerFrame and PlayerFrame.PlayerFrameContainer
-  if not container then return end
-  if not b.atlas then
-    if dragon then dragon:Hide() end
-    return
-  end
-  dragon = dragon or container:CreateTexture(nil, "ARTWORK", nil, 2)
-  dragon:SetAtlas(b.atlas, true)
-  local ulx, uly, llx, lly, urx, ury, lrx, lry = dragon:GetTexCoord()
-  dragon:SetTexCoord(urx, ury, lrx, lry, ulx, uly, llx, lly) -- mirror left/right
-  dragon:ClearAllPoints()
-  local nudge = db.borderNudge and db.borderNudge[b.key] or { 0, 0 } -- /quinta nudge
-  dragon:SetPoint("TOPLEFT", container, "TOPLEFT", b.x + nudge[1], -8 + nudge[2])
-  dragon:Show()
-end
-
--- The game redraws the player frame art in some cases: put the border back
-local borderHooked = false
-local function HookPlayerBorder()
-  if borderHooked then return end
-  borderHooked = true
-  for _, name in ipairs({ "PlayerFrame_ToPlayerArt", "PlayerFrame_UpdateArt" }) do
-    if _G[name] then hooksecurefunc(name, function() ApplyPlayerBorder() end) end
   end
 end
 
@@ -313,13 +255,423 @@ local function QueueRankUpgrade()
 end
 
 ---------------------------------------------------------------------------
+-- Raid marker panel: click a mark to put it on your target (click the same
+-- mark again, or X, to remove it). Drag it anywhere.
+---------------------------------------------------------------------------
+local MARK_SIZE = 24
+local markers
+
+local function CreateMarkers()
+  markers = CreateFrame("Frame", "QuintaMarkers", UIParent, BackdropTemplateMixin and "BackdropTemplate")
+  markers:SetSize(5 * (MARK_SIZE + 2) + 6, 2 * (MARK_SIZE + 2) + 6) -- 5 on top, 4 below
+  markers:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+  markers:SetBackdropColor(0, 0, 0, 0.5)
+  markers:SetBackdropBorderColor(0, 0, 0, 0.8)
+  markers:SetMovable(true)
+  markers:SetClampedToScreen(true)
+  markers:EnableMouse(true)
+  markers:RegisterForDrag("LeftButton")
+  local function StartDrag() if not InCombatLockdown() then markers:StartMoving() end end -- not allowed in combat
+  local function StopDrag()
+    markers:StopMovingOrSizing()
+    local point, _, relPoint, x, y = markers:GetPoint()
+    db.markersPos = { point, relPoint, x, y }
+  end
+  markers:SetScript("OnDragStart", StartDrag)
+  markers:SetScript("OnDragStop", StopDrag)
+
+  local p = db.markersPos
+  if p then markers:SetPoint(p[1], UIParent, p[2], p[3], p[4]) else markers:SetPoint("TOP", 0, -120) end
+
+  for i = 1, 9 do
+    local mark = i <= 8 and i or 0 -- the 9th button removes the mark
+    -- Setting marks is protected on this client, so each mark is a secure
+    -- button that does it for us: "toggle" puts the mark on your target, or
+    -- removes it if it already has that mark; "clear" removes any mark.
+    local b = CreateFrame("Button", nil, markers, "SecureActionButtonTemplate")
+    b:RegisterForClicks("AnyUp", "AnyDown")
+    b:SetAttribute("type", "raidtarget")
+    b:SetAttribute("unit", "target")
+    b:SetAttribute("action", mark > 0 and "toggle" or "clear")
+    if mark > 0 then b:SetAttribute("marker", mark) end
+    b:SetSize(MARK_SIZE, MARK_SIZE)
+    -- top row: marks 1-5; bottom row: 6-8 and X, centered under the top row
+    local row, col = (i <= 5) and 0 or 1, (i <= 5) and (i - 1) or (i - 6)
+    local x = 4 + col * (MARK_SIZE + 2) + row * (MARK_SIZE + 2) / 2
+    b:SetPoint("TOPLEFT", x, -4 - row * (MARK_SIZE + 2))
+    if mark > 0 then
+      b:SetNormalTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. mark)
+    else
+      b:SetNormalTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
+    end
+    b:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+    -- dragging a mark moves the whole panel
+    b:RegisterForDrag("LeftButton")
+    b:SetScript("OnDragStart", StartDrag)
+    b:SetScript("OnDragStop", StopDrag)
+  end
+end
+
+local markersPending = false
+local function UpdateMarkers()
+  if not db then return end
+  -- secure buttons can't be created, shown or hidden in combat: do it after
+  if InCombatLockdown() then markersPending = true return end
+  markersPending = false
+  if db.showMarkers and not markers then CreateMarkers() end
+  if not markers then return end
+  if db.showMarkers then
+    -- secure state driver: shows/hides with your target, even in combat
+    RegisterStateDriver(markers, "visibility", "[@target,exists] show; hide")
+  else
+    UnregisterStateDriver(markers, "visibility")
+    markers:Hide()
+  end
+end
+
+---------------------------------------------------------------------------
+-- Movable loot roll window (Need / Greed / Pass): Shift-drag a roll to move
+-- it, or /quinta loot to show a box you can place without a roll up.
+-- The rolls hang from our own anchor, so Blizzard moving them back is undone.
+---------------------------------------------------------------------------
+local lootAnchor, lootHooked, lootPlacing
+local LOOT_DEFAULT = { "BOTTOM", "BOTTOM", 0, 280 }
+
+local function SaveLootPos()
+  local point, _, relPoint, x, y = lootAnchor:GetPoint()
+  db.lootPos = { point, relPoint, x, y }
+end
+
+local function PlaceLootAnchor()
+  local p = db.lootPos or LOOT_DEFAULT
+  lootAnchor:ClearAllPoints()
+  lootAnchor:SetPoint(p[1], UIParent, p[2], p[3], p[4])
+end
+
+-- The frame Blizzard stacks the rolls in (name depends on the client)
+local function LootTarget()
+  return _G.GroupLootContainer or _G.GroupLootFrame1
+end
+
+local anchoring = false
+local function AnchorLoot(frame)
+  if anchoring or not db or not db.moveLoot or not lootAnchor or not frame then return end
+  if not db.lootPos and not lootPlacing then return end -- not moved yet: Blizzard's spot
+  anchoring = true
+  frame:ClearAllPoints()
+  frame:SetPoint("BOTTOM", lootAnchor, "BOTTOM", 0, 0) -- more rolls stack upward
+  anchoring = false
+end
+
+local function StartLootDrag()
+  if not db.moveLoot or not (lootPlacing or IsShiftKeyDown()) then return end
+  local target = LootTarget()
+  if not db.lootPos and not lootPlacing and target and target:GetBottom() then
+    -- first move: start the anchor where Blizzard put the rolls
+    lootAnchor:ClearAllPoints()
+    lootAnchor:SetPoint("BOTTOM", UIParent, "BOTTOMLEFT", (target:GetCenter()), target:GetBottom())
+    SaveLootPos()
+    AnchorLoot(target)
+  end
+  lootAnchor:StartMoving()
+end
+local function StopLootDrag()
+  lootAnchor:StopMovingOrSizing()
+  SaveLootPos()
+  AnchorLoot(LootTarget())
+end
+
+-- Let a roll frame be Shift-dragged (it moves the anchor, the rolls follow)
+local function MakeRollDraggable(roll)
+  if not roll or roll.quintaDrag then return end
+  roll.quintaDrag = true
+  roll:EnableMouse(true)
+  roll:RegisterForDrag("LeftButton")
+  roll:HookScript("OnDragStart", StartLootDrag)
+  roll:HookScript("OnDragStop", StopLootDrag)
+end
+
+local function SetupLootMover()
+  if lootHooked then return end
+  local target = LootTarget()
+  if not target then return end
+  lootHooked = true
+
+  lootAnchor = CreateFrame("Frame", "QuintaLootAnchor", UIParent, BackdropTemplateMixin and "BackdropTemplate")
+  lootAnchor:SetSize(250, 70)
+  lootAnchor:SetMovable(true)
+  lootAnchor:SetClampedToScreen(true)
+  lootAnchor:RegisterForDrag("LeftButton")
+  lootAnchor:SetScript("OnDragStart", StartLootDrag)
+  lootAnchor:SetScript("OnDragStop", StopLootDrag)
+  lootAnchor:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+  lootAnchor:EnableMouse(false)
+  local text = lootAnchor:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  text:SetPoint("CENTER")
+  text:SetText("Loot rolls appear here\nDrag me, then /quinta loot")
+  lootAnchor.text = text
+  lootAnchor:SetBackdropColor(0, 0, 0, 0) -- invisible until /quinta loot
+  lootAnchor:SetBackdropBorderColor(0, 0, 0, 0)
+  text:Hide()
+  PlaceLootAnchor()
+
+  -- Blizzard re-positions the rolls whenever it lays out the screen: put them back
+  hooksecurefunc(target, "SetPoint", AnchorLoot)
+  for i = 1, (NUM_GROUP_LOOT_FRAMES or 4) do
+    MakeRollDraggable(_G["GroupLootFrame" .. i])
+  end
+  if _G.GroupLootContainer_AddFrame then -- newer clients create roll frames as needed
+    hooksecurefunc("GroupLootContainer_AddFrame", function(_, roll) MakeRollDraggable(roll) end)
+  end
+  AnchorLoot(target)
+end
+
+-- /quinta loot: show the anchor box so it can be placed without a roll up
+local function ToggleLootPlacing()
+  if not db.moveLoot then
+    print("|cff33ff99Quinta:|r turn on \"Move loot roll window\" in /quinta first.")
+    return
+  end
+  SetupLootMover()
+  if not lootAnchor then return end
+  lootPlacing = not lootPlacing
+  lootAnchor:EnableMouse(lootPlacing)
+  lootAnchor:SetBackdropColor(0, 0.6, 0.3, lootPlacing and 0.4 or 0)
+  lootAnchor:SetBackdropBorderColor(0.2, 1, 0.6, lootPlacing and 0.9 or 0)
+  lootAnchor.text:SetShown(lootPlacing)
+  if lootPlacing then AnchorLoot(LootTarget()) else SaveLootPos() end
+  print(lootPlacing and "|cff33ff99Quinta:|r drag the green box, then type /quinta loot again to lock it."
+                     or "|cff33ff99Quinta:|r loot roll position saved.")
+end
+
+---------------------------------------------------------------------------
+-- Shadow Word: Death kill alert (like a WeakAura): a big Shadow Word: Death
+-- icon pops up when your target's health is at or below the spell's damage
+-- (the lowest number in its tooltip, so it kills even without a crit).
+-- /quinta swd shows it so you can drag it somewhere else.
+--
+-- In WoW Forever the target's health is secret in combat: addon code can't
+-- compare it with anything. A StatusBar can, so we let it: max = health,
+-- value = damage, so its fill only reaches the right end when damage >= health.
+-- The bar is very long and only its last icon-width is visible (clipped), with
+-- the icon riding the fill's end, so the icon shows only when it kills.
+---------------------------------------------------------------------------
+local GetSpellDesc = (C_Spell and C_Spell.GetSpellDescription) or GetSpellDescription
+local GetSpellIcon = (C_Spell and C_Spell.GetSpellTexture) or GetSpellTexture
+local ALERT_SIZE = 56
+local ALERT_BAR_LENGTH = 20000
+local ALERT_DEFAULT = { "CENTER", "CENTER", 0, -120 }
+
+-- Highest rank of Shadow Word: Death you know (nil if you don't have it)
+local function DeathSpell()
+  local best = GetHighestRanks()
+  local top = best["Shadow Word: Death"] or best[GetSpellNameByID(32379) or ""]
+  return top and top.id
+end
+
+-- Damage per spell ID, read from the tooltip ("inflicts 338 to 358 ..." -> 338)
+local deathDamage = {}
+local function DeathDamage(id)
+  if deathDamage[id] == nil then
+    local desc = GetSpellDesc and GetSpellDesc(id)
+    local number = desc and desc:match("(%d[%d,%.]*)")
+    deathDamage[id] = number and tonumber((number:gsub("%D", ""))) or nil
+  end
+  return deathDamage[id]
+end
+
+local alert, alertBar, alertIcon, alertPlacing
+local deathSpell -- refreshed when your spells change
+
+local function SaveAlertPos()
+  local point, _, relPoint, x, y = alert:GetPoint()
+  db.deathAlertPos = { point, relPoint, x, y }
+end
+
+local function CreateAlert()
+  -- the part you drag (only takes the mouse while placing it)
+  alert = CreateFrame("Frame", "QuintaDeathAlert", UIParent)
+  alert:SetSize(ALERT_SIZE, ALERT_SIZE)
+  alert:SetFrameStrata("HIGH")
+  alert:SetMovable(true)
+  alert:SetClampedToScreen(true)
+  alert:RegisterForDrag("LeftButton")
+  alert:SetScript("OnDragStart", alert.StartMoving)
+  alert:SetScript("OnDragStop", function() alert:StopMovingOrSizing() SaveAlertPos() end)
+  alert:EnableMouse(false)
+  local p = db.deathAlertPos or ALERT_DEFAULT
+  alert:SetPoint(p[1], UIParent, p[2], p[3], p[4])
+
+  -- the window: only the end of the long bar shows through it
+  local window = CreateFrame("Frame", nil, alert)
+  window:SetAllPoints()
+  window:SetClipsChildren(true)
+
+  alertBar = CreateFrame("StatusBar", nil, window)
+  alertBar:SetSize(ALERT_BAR_LENGTH, ALERT_SIZE)
+  alertBar:SetPoint("RIGHT", window, "RIGHT")
+  alertBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+  alertBar:SetStatusBarColor(0, 0, 0, 0)
+  alertBar:SetMinMaxValues(0, 1)
+  alertBar:SetValue(0)
+
+  -- the icon rides the end of the fill
+  alertIcon = CreateFrame("Frame", nil, alertBar)
+  alertIcon:SetSize(ALERT_SIZE, ALERT_SIZE)
+  alertIcon:SetPoint("RIGHT", alertBar:GetStatusBarTexture(), "RIGHT")
+  local border = alertIcon:CreateTexture(nil, "BACKGROUND")
+  border:SetAllPoints()
+  border:SetColorTexture(0.75, 0.35, 1, 1) -- shadow purple
+  local icon = alertIcon:CreateTexture(nil, "ARTWORK")
+  icon:SetPoint("TOPLEFT", 2, -2)
+  icon:SetPoint("BOTTOMRIGHT", -2, 2)
+  icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  alertIcon.icon = icon
+  local text = alertIcon:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  text:SetPoint("BOTTOM", 0, 3)
+  text:SetText("KILL")
+
+  local pulse = alertIcon:CreateAnimationGroup()
+  pulse:SetLooping("BOUNCE")
+  local fade = pulse:CreateAnimation("Alpha")
+  fade:SetFromAlpha(1)
+  fade:SetToAlpha(0.5)
+  fade:SetDuration(0.35)
+  pulse:Play()
+
+  -- hint shown while placing it
+  local hint = alert:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  hint:SetPoint("TOP", alert, "BOTTOM", 0, -4)
+  hint:SetText("Drag me, then /quinta swd")
+  hint:Hide()
+  alert.hint = hint
+  alert:Hide()
+end
+
+local function SetAlertIcon()
+  alertIcon.icon:SetTexture((deathSpell and GetSpellIcon(deathSpell)) or GetSpellIcon(32379)
+    or "Interface\\Icons\\Spell_Shadow_DemonicFortitude")
+end
+
+-- A value addon code may use, or nil if the call failed or the value is secret
+local function Plain(ok, value)
+  if not ok or (issecretvalue and issecretvalue(value)) then return nil end
+  return value
+end
+
+-- Cooldown: read from the game when it lets us; in combat Forever can hide it,
+-- so we also time it ourselves from the moment you cast the spell.
+local deathReadyAt = 0       -- GetTime() when our own timer says it's ready
+local deathCooldownLength = 12 -- seconds; replaced by the real length when the game shows it
+
+local function DeathCooldownFromGame()
+  local start, duration
+  if C_Spell and C_Spell.GetSpellCooldown then
+    local info = Plain(pcall(C_Spell.GetSpellCooldown, deathSpell))
+    if type(info) == "table" then
+      start, duration = Plain(true, info.startTime), Plain(true, info.duration)
+    end
+  elseif GetSpellCooldown then
+    local ok, s, d = pcall(GetSpellCooldown, deathSpell)
+    start, duration = Plain(ok, s), Plain(ok, d)
+  end
+  return start, duration
+end
+
+local function DeathOnCooldown()
+  local start, duration = DeathCooldownFromGame()
+  if start and duration then
+    if duration <= 1.5 then return false end -- ready (or only the global cooldown)
+    deathCooldownLength = duration
+    return start + duration - GetTime() > 0.1
+  end
+  return GetTime() < deathReadyAt -- hidden: use our own timer
+end
+
+local function OnDeathCast(spellID)
+  spellID = Plain(true, spellID)
+  if spellID and deathSpell and GetSpellNameByID(spellID) == GetSpellNameByID(deathSpell) then
+    deathReadyAt = GetTime() + deathCooldownLength
+  end
+end
+
+local function UpdateDeathAlert()
+  if alertPlacing then return end
+  local damage = db.deathAlert and deathSpell and DeathDamage(deathSpell)
+  -- these can be secret too: only a plain "dead" or "can't attack" hides it
+  local dead = Plain(pcall(UnitIsDeadOrGhost, "target"))
+  local attackable = Plain(pcall(UnitCanAttack, "player", "target"))
+  if not (damage and UnitExists("target")) or dead == true or attackable == false or DeathOnCooldown() then
+    if alert then alert:Hide() end
+    return
+  end
+  if not alert then CreateAlert() end
+  -- the bar compares for us: full (icon visible) only when damage >= health
+  local fed = pcall(function()
+    alertBar:SetMinMaxValues(0, UnitHealth("target"))
+    alertBar:SetValue(damage)
+  end)
+  if not fed then alert:Hide() return end
+  SetAlertIcon()
+  alert:Show()
+end
+
+-- /quinta swd: show the icon so it can be dragged, again to lock it
+local function ToggleAlertPlacing()
+  if not alert then CreateAlert() end
+  alertPlacing = not alertPlacing
+  alert:EnableMouse(alertPlacing)
+  alert.hint:SetShown(alertPlacing)
+  if alertPlacing then
+    alertBar:SetMinMaxValues(0, 1)
+    alertBar:SetValue(1) -- full: icon visible
+    SetAlertIcon()
+    alert:Show()
+  else
+    SaveAlertPos()
+    alert:Hide()
+    print("|cff33ff99Quinta:|r Shadow Word: Death alert position saved.")
+    UpdateDeathAlert()
+  end
+end
+
+local deathWatcher
+local function SetupDeathAlert()
+  if deathWatcher or select(2, UnitClass("player")) ~= "PRIEST" then return end
+  deathSpell = DeathSpell()
+  deathWatcher = CreateFrame("Frame")
+  -- the cooldown length from the game's spell data, if it gives a plain number
+  local ok, ms = pcall(GetSpellBaseCooldown or function() end, deathSpell or 32379)
+  ms = Plain(ok, ms)
+  if type(ms) == "number" and ms > 1500 then deathCooldownLength = ms / 1000 end
+  deathWatcher:RegisterEvent("SPELLS_CHANGED")
+  pcall(deathWatcher.RegisterUnitEvent, deathWatcher, "UNIT_SPELLCAST_SUCCEEDED", "player")
+  deathWatcher:SetScript("OnEvent", function(_, event, _, _, spellID)
+    if event == "UNIT_SPELLCAST_SUCCEEDED" then
+      OnDeathCast(spellID)
+      return
+    end
+    deathSpell = DeathSpell() -- new rank or more spell power
+    wipe(deathDamage)
+  end)
+  -- check 10 times a second, like a WeakAura does
+  local elapsed = 0
+  deathWatcher:SetScript("OnUpdate", function(_, dt)
+    elapsed = elapsed + dt
+    if elapsed < 0.1 then return end
+    elapsed = 0
+    UpdateDeathAlert()
+  end)
+end
+
+---------------------------------------------------------------------------
 -- Settings window (/quinta)
 ---------------------------------------------------------------------------
 local panel
 
 local function CreatePanel()
   panel = CreateFrame("Frame", "QuintaOptionsFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate")
-  panel:SetSize(300, 405)
+  panel:SetSize(300, 460)
   panel:SetPoint("CENTER")
   panel:SetFrameStrata("DIALOG")
   panel:SetBackdrop({
@@ -501,24 +853,49 @@ local function CreatePanel()
     if db.autoRank then UpgradeActionBarRanks() end
   end)
 
-  -- Player frame border: click to cycle through the styles
-  local borderText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  borderText:SetPoint("TOPLEFT", 24, -368)
-  borderText:SetText("Player frame border")
-  local borderButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  borderButton:SetSize(110, 22)
-  borderButton:SetPoint("LEFT", borderText, "RIGHT", 10, 0)
-  local function UpdateBorderButton()
-    borderButton:SetText(BORDERS[BorderIndex()].label)
-  end
-  borderButton:SetScript("OnClick", function()
-    db.playerBorder = BORDERS[BorderIndex() % #BORDERS + 1].key
-    UpdateBorderButton()
-    ApplyPlayerBorder(true)
+  -- Raid marker panel checkbox
+  local markCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  markCheck:SetPoint("TOPLEFT", 20, -362)
+  local markText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  markText:SetPoint("LEFT", markCheck, "RIGHT", 4, 0)
+  markText:SetText("Show raid marker panel")
+  markCheck:SetScript("OnClick", function(self)
+    db.showMarkers = self:GetChecked() and true or false
+    UpdateMarkers()
+  end)
+
+  -- Movable loot roll window checkbox
+  local lootCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  lootCheck:SetPoint("TOPLEFT", 20, -392)
+  local lootText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  lootText:SetPoint("LEFT", lootCheck, "RIGHT", 4, 0)
+  lootText:SetText("Move loot roll window (Shift-drag)")
+  lootCheck:SetScript("OnClick", function(self)
+    db.moveLoot = self:GetChecked() and true or false
+    if db.moveLoot then
+      SetupLootMover()
+      AnchorLoot(LootTarget())
+    else
+      if lootPlacing then ToggleLootPlacing() end
+      print("|cff33ff99Quinta:|r /reload to put the loot roll window back in its usual spot.")
+    end
+  end)
+
+  -- Shadow Word: Death alert checkbox
+  local deathCheck = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+  deathCheck:SetPoint("TOPLEFT", 20, -422)
+  local deathText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  deathText:SetPoint("LEFT", deathCheck, "RIGHT", 4, 0)
+  deathText:SetText("Shadow Word: Death kill alert")
+  deathCheck:SetScript("OnClick", function(self)
+    db.deathAlert = self:GetChecked() and true or false
+    UpdateDeathAlert()
   end)
 
   panel:SetScript("OnShow", function()
-    UpdateBorderButton()
+    deathCheck:SetChecked(db.deathAlert)
+    lootCheck:SetChecked(db.moveLoot)
+    markCheck:SetChecked(db.showMarkers)
     rankCheck:SetChecked(db.autoRank)
     zoomSlider:SetValue(db.cameraZoom)
     UpdateZoomLabel(db.cameraZoom)
@@ -535,15 +912,17 @@ end
 
 SLASH_QUINTA1 = "/quinta"
 SlashCmdList.QUINTA = function(msg)
-  -- /quinta nudge <x> <y>: move the player frame dragon (right/up are positive)
-  local dx, dy = (msg or ""):match("^nudge%s+(%-?%d+)%s+(%-?%d+)")
-  if dx then
-    local key = BORDERS[BorderIndex()].key
-    db.borderNudge = db.borderNudge or {}
-    local n = db.borderNudge[key] or { 0, 0 }
-    db.borderNudge[key] = { n[1] + tonumber(dx), n[2] + tonumber(dy) }
-    ApplyPlayerBorder()
-    print(("|cff33ff99Quinta:|r %s dragon moved to %d, %d."):format(key, db.borderNudge[key][1], db.borderNudge[key][2]))
+  -- /quinta loot: place the loot roll window; /quinta loot reset: back to default
+  local lootCmd = (msg or ""):lower():match("^loot%s*(%a*)")
+  if (msg or ""):lower():match("^%s*swd") then ToggleAlertPlacing() return end
+  if lootCmd then
+    if lootCmd == "reset" then
+      db.lootPos = nil
+      if lootAnchor then PlaceLootAnchor() end
+      print("|cff33ff99Quinta:|r loot roll window back to its default spot.")
+    else
+      ToggleLootPlacing()
+    end
     return
   end
   if not panel then CreatePanel() end
@@ -577,6 +956,7 @@ f:SetScript("OnEvent", function(self, event, arg1)
       for key, value in pairs(DEFAULTS) do
         if db[key] == nil then db[key] = value end
       end
+      db.playerBorder, db.borderNudge, db.deathGlow = nil, nil, nil -- removed features
     end
     return
   end
@@ -591,15 +971,17 @@ f:SetScript("OnEvent", function(self, event, arg1)
     inCombat = false
     SetChatVisible(not db.hideChatAlways)
     if rankPending then QueueRankUpgrade() end
+    if markersPending then UpdateMarkers() end
   elseif event == "PLAYER_ENTERING_WORLD" then
     KeepEditBoxesVisible()
     HookChatFading()
-    HookPlayerBorder()
-    ApplyPlayerBorder()
+    UpdateMarkers()
+    if db.moveLoot then SetupLootMover() end
     UpdateChatVisibility()
     SetupBarHiding()
     ApplyCameraZoom(db.cameraZoom)
     QueueRankUpgrade()
+    SetupDeathAlert()
   end
 
   ApplyScale()

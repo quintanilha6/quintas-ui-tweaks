@@ -1,6 +1,6 @@
 ## Interface: 16001, 11509, 20506, 38002, 50504, 120105, 120107
 ## Title: Quinta's UI Tweaks
-## Notes: UI scale, hide chat in combat, hide menu, bag bar and quest tracker, camera distance, auto-upgrade spell ranks. Type /quinta for options.
+## Notes: UI scale, hide chat, hide menu, bag bar and quest tracker, camera distance, auto-upgrade spell ranks, raid marker panel, movable loot rolls, Shadow Word: Death kill alert. Type /quinta for options.
 ## Author: Quinta
 ## Version: @project-version@
 ## SavedVariables: QuintaDB
